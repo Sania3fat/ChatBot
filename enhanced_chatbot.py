@@ -18,6 +18,9 @@ import warnings
 import time
 import requests
 import glob
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+import urllib.robotparser
 warnings.filterwarnings("ignore")
 
 # Download required NLTK data
@@ -304,8 +307,9 @@ class Config:
     BATCH_SIZE = 32  # Larger batch size for efficiency
     MAX_RETRIES = 2  # Reduced retries for faster response
     
-    # Institutional PDF directory
+    # Institutional PDF directory and web sources
     INSTITUTIONAL_PDF_DIR = "institutional_pdfs"
+    INSTITUTIONAL_WEB_SOURCES = "institutional_web_sources.json"  # JSON file with URLs
     CACHE_DIR = "institutional_cache"
     
     # Context-aware settings
@@ -319,6 +323,7 @@ class InstitutionalPDFChatbot:
     
     def __init__(self):
         self.pdf_contents: Dict[str, str] = {}
+        self.web_contents: Dict[str, str] = {}  # Store web page content
         self.text_chunks: List[Dict] = []
         self.chunk_embeddings = None
         self.tfidf_vectorizer = None
@@ -412,7 +417,7 @@ class InstitutionalPDFChatbot:
             metadata = {
                 'identifier': identifier,
                 'cached_at': datetime.now().isoformat(),
-                'files_count': len(self.pdf_contents),
+                'files_count': len(self.pdf_contents) + len(self.web_contents),
                 'chunks_count': len(self.text_chunks),
                 'config': {
                     'chunk_size': Config.CHUNK_SIZE,
@@ -502,7 +507,116 @@ class InstitutionalPDFChatbot:
         except Exception as e:
             st.error(f"❌ Error processing {filename}: {e}")
 
-    def load_institutional_pdfs(self) -> bool:
+    def extract_text_from_webpage(self, url: str) -> None:
+        """Extract text content from a webpage."""
+        try:
+            # Check robots.txt compliance (basic check)
+            parsed_url = urlparse(url)
+            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            
+            # Set headers to identify as a bot
+            headers = {
+                'User-Agent': 'Ask Scottie Academic Chatbot (Educational Use)',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            }
+            
+            # Fetch the webpage
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # Parse with BeautifulSoup
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Remove script and style elements
+            for script in soup(["script", "style", "nav", "footer", "header"]):
+                script.decompose()
+            
+            # Extract text from main content areas
+            text_content = ""
+            
+            # Try to find main content areas first
+            main_selectors = ['main', 'article', '.content', '.main-content', '#content', '#main']
+            main_content = None
+            
+            for selector in main_selectors:
+                main_content = soup.select_one(selector)
+                if main_content:
+                    break
+            
+            if main_content:
+                text_content = main_content.get_text()
+            else:
+                # Fallback to body content
+                body = soup.find('body')
+                if body:
+                    text_content = body.get_text()
+                else:
+                    text_content = soup.get_text()
+            
+            # Clean the text
+            lines = (line.strip() for line in text_content.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text_content = ' '.join(chunk for chunk in chunks if chunk)
+            
+            # Additional cleaning
+            text_content = re.sub(r'\s+', ' ', text_content)  # Multiple spaces to single
+            text_content = re.sub(r'\n+', '\n', text_content)  # Multiple newlines to single
+            
+            if len(text_content) > 200:  # Minimum content threshold
+                # Use domain name as identifier
+                domain = urlparse(url).netloc
+                page_title = soup.find('title')
+                if page_title:
+                    identifier = f"{domain} - {page_title.get_text().strip()}"
+                else:
+                    identifier = domain
+                
+                self.web_contents[identifier] = text_content
+                st.success(f"✅ Extracted {len(text_content):,} characters from {identifier}")
+            else:
+                st.warning(f"⚠️ Minimal content extracted from {url}")
+                
+        except requests.exceptions.RequestException as e:
+            st.error(f"❌ Error fetching {url}: {e}")
+        except Exception as e:
+            st.error(f"❌ Error processing {url}: {e}")
+
+    def load_web_sources(self) -> bool:
+        """Load web pages from the configured sources file."""
+        web_sources_file = Config.INSTITUTIONAL_WEB_SOURCES
+        
+        if not os.path.exists(web_sources_file):
+            return False
+        
+        try:
+            with open(web_sources_file, 'r', encoding='utf-8') as f:
+                web_sources = json.load(f)
+            
+            if not web_sources or 'urls' not in web_sources:
+                return False
+            
+            urls = web_sources['urls']
+            if not urls:
+                return False
+            
+            progress_bar = st.progress(0, text="Processing web sources...")
+            
+            for i, url in enumerate(urls):
+                st.info(f"Processing: {url}")
+                self.extract_text_from_webpage(url)
+                
+                progress_bar.progress((i + 1) / len(urls), 
+                                    text=f"Processing web source ({i+1}/{len(urls)})")
+            
+            progress_bar.empty()
+            return len(self.web_contents) > 0
+            
+        except Exception as e:
+            st.error(f"Error loading web sources: {e}")
+            return False
         """Load all PDFs from the institutional directory."""
         self.pdf_contents = {}
         
@@ -523,7 +637,35 @@ class InstitutionalPDFChatbot:
         
         progress_bar.empty()
         
+    def load_institutional_pdfs(self) -> bool:
+        """Load all PDFs from the institutional directory."""
+        self.pdf_contents = {}
+        
+        # Look for PDF files in the institutional directory
+        pdf_files = glob.glob(os.path.join(Config.INSTITUTIONAL_PDF_DIR, "*.pdf"))
+        
+        if not pdf_files:
+            return False
+        
+        progress_bar = st.progress(0, text="Processing PDF files...")
+        
+        for i, pdf_path in enumerate(pdf_files):
+            filename = os.path.basename(pdf_path)
+            self.extract_text_from_pdf(pdf_path, filename)
+            
+            progress_bar.progress((i + 1) / len(pdf_files), 
+                                text=f"Processing {filename} ({i+1}/{len(pdf_files)})")
+        
+        progress_bar.empty()
+        
         return len(self.pdf_contents) > 0
+
+    def load_all_sources(self) -> bool:
+        """Load both PDFs and web sources."""
+        pdf_success = self.load_institutional_pdfs()
+        web_success = self.load_web_sources()
+        
+        return pdf_success or web_success
 
     def smart_chunk_text(self, text: str, source: str) -> List[Dict]:
         """
@@ -641,19 +783,24 @@ class InstitutionalPDFChatbot:
         self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(chunk_texts)
 
     def create_chunks_and_embeddings(self) -> bool:
-        """Process PDF content into chunks and generate embeddings - consistent with first chatbot."""
+        """Process PDF and web content into chunks and generate embeddings."""
         self.text_chunks = []
-        if not self.pdf_contents:
-            st.error("No PDF content available.")
+        if not self.pdf_contents and not self.web_contents:
+            st.error("No PDF or web content available.")
             return False
 
-        # Create chunks
+        # Create chunks from PDFs
         for filename, content in self.pdf_contents.items():
-            file_chunks = self.smart_chunk_text(content, filename)
+            file_chunks = self.smart_chunk_text(content, f"📄 {filename}")
             self.text_chunks.extend(file_chunks)
         
+        # Create chunks from web sources
+        for source_name, content in self.web_contents.items():
+            web_chunks = self.smart_chunk_text(content, f"🌐 {source_name}")
+            self.text_chunks.extend(web_chunks)
+        
         if not self.text_chunks:
-            st.error("No chunks created from PDFs.")
+            st.error("No chunks created from sources.")
             return False
 
         st.info(f"Creating embeddings for {len(self.text_chunks)} chunks...")
@@ -1039,31 +1186,49 @@ def initialize_chatbot():
     if 'chatbot_initialized' not in st.session_state:
         chatbot = InstitutionalPDFChatbot()
         
-        # Create identifier for institutional documents
+        # Create identifier for institutional documents (including web sources)
         pdf_files = glob.glob(os.path.join(Config.INSTITUTIONAL_PDF_DIR, "*.pdf"))
-        if not pdf_files:
+        web_sources_file = Config.INSTITUTIONAL_WEB_SOURCES
+        
+        if not pdf_files and not os.path.exists(web_sources_file):
             # Show setup instructions instead of stopping
-            st.warning(f"⚠️ No PDF files found in `{Config.INSTITUTIONAL_PDF_DIR}/` directory.")
+            st.warning(f"⚠️ No PDF files or web sources found.")
             
             with st.expander("📋 Setup Instructions", expanded=True):
                 st.markdown("""
                 **To set up Ask Scottie's Academic Catalog knowledge base:**
                 
+                **Option 1: PDF Files**
                 1. Create a folder named `institutional_pdfs` in the same directory as this app
                 2. Add your **Maryville College Academic Catalog PDF documents** to this folder
-                3. Refresh the page
+                
+                **Option 2: Web Sources**
+                1. Create a file named `institutional_web_sources.json` in the same directory as this app
+                2. Add URLs to scrape in this format:
+                ```json
+                {
+                  "urls": [
+                    "https://www.maryvillecollege.edu/academics/catalog/",
+                    "https://www.maryvillecollege.edu/admissions/requirements/",
+                    "https://www.maryvillecollege.edu/academics/programs/"
+                  ]
+                }
+                ```
+                
+                **Option 3: Both PDFs and Web Sources**
+                - Set up both options above for comprehensive coverage
                 
                 **Example folder structure:**
                 ```
                 ask_scottie/
                 ├── institutional_pdfs/
                 │   ├── maryville_academic_catalog_2025-2026.pdf
-                │   ├── student_handbook.pdf
-                │   └── course_descriptions.pdf
+                │   └── student_handbook.pdf
+                ├── institutional_web_sources.json
                 └── ask_scottie.py
                 ```
                 
-                **Note:** Ask Scottie only works with Academic Catalog documents.
+                **Note:** Ask Scottie only works with Academic Catalog information.
                 """)
             
             # Create the directory if it doesn't exist
@@ -1075,11 +1240,18 @@ def initialize_chatbot():
             return None
         
         with st.spinner("Initializing knowledge base..."):
-            # Create cache identifier
+            # Create cache identifier including both PDFs and web sources
             file_stats = []
+            
+            # Add PDF file stats
             for pdf_path in sorted(pdf_files):
                 stat = os.stat(pdf_path)
-                file_stats.append(f"{os.path.basename(pdf_path)}-{stat.st_size}-{stat.st_mtime}")
+                file_stats.append(f"pdf-{os.path.basename(pdf_path)}-{stat.st_size}-{stat.st_mtime}")
+            
+            # Add web sources file stat if it exists
+            if os.path.exists(web_sources_file):
+                stat = os.stat(web_sources_file)
+                file_stats.append(f"web-sources-{stat.st_size}-{stat.st_mtime}")
             
             identifier = "institutional_" + hashlib.sha256("|".join(file_stats).encode('utf-8')).hexdigest()
             
@@ -1088,7 +1260,7 @@ def initialize_chatbot():
                 st.success("✅ Knowledge base loaded from cache")
             else:
                 # Load and process documents
-                if chatbot.load_institutional_pdfs():
+                if chatbot.load_all_sources():  # This loads both PDFs and web sources
                     success = chatbot.create_chunks_and_embeddings()
                     if success:
                         chatbot.save_to_cache(identifier)
@@ -1097,7 +1269,7 @@ def initialize_chatbot():
                         st.error("Failed to create embeddings")
                         return None
                 else:
-                    st.error("Failed to load institutional documents")
+                    st.error("Failed to load any sources")
                     return None
             
             st.session_state.chatbot = chatbot
@@ -1154,12 +1326,12 @@ def main():
         with col2:
             st.success("✅ OpenAI client initialized")
         with col3:
-            st.error("❌ No Academic Catalog documents found")
+            st.error("❌ No sources found")
         
         st.markdown("</div>", unsafe_allow_html=True)
         
         # Add refresh button
-        if st.button("🔄 Refresh After Adding Academic Catalog PDFs"):
+        if st.button("🔄 Refresh After Adding Sources"):
             st.rerun()
         
         return
@@ -1179,8 +1351,8 @@ def main():
             st.metric("Documents", len(chatbot.pdf_contents))
             st.metric("Knowledge Chunks", len(chatbot.text_chunks))
         with col2:
+            st.metric("Web Sources", len(chatbot.web_contents))
             st.metric("Chat Messages", len(st.session_state.messages))
-            st.metric("Search Results", Config.SEARCH_RESULTS)
         
         st.markdown("---")
         st.markdown("**Configuration:**")
@@ -1209,17 +1381,32 @@ def main():
     if st.session_state.messages == []:
         st.markdown("""
         <div style="background: white; border: 2px solid #EC5E1A; border-radius: 8px; padding: 15px; margin: 15px 0;">
-            <h3 style="color: #5B0F1B; text-align: center; margin-top: 0; font-size: 1.1em;">📚 Available Documents</h3>
+            <h3 style="color: #5B0F1B; text-align: center; margin-top: 0; font-size: 1.1em;">📚 Available Sources</h3>
         """, unsafe_allow_html=True)
         
-        doc_names = list(chatbot.pdf_contents.keys())
-        if doc_names:
-            for doc_name in doc_names:
+        # Show PDF documents
+        pdf_names = list(chatbot.pdf_contents.keys())
+        web_names = list(chatbot.web_contents.keys())
+        
+        if pdf_names:
+            st.markdown("<p style='color: #5B0F1B; font-weight: 600; margin: 10px 0 5px 0;'>📄 PDF Documents:</p>", unsafe_allow_html=True)
+            for doc_name in pdf_names:
                 st.markdown(f"""
                 <div style="background: linear-gradient(135deg, #E3F2FD, #BBDEFB); 
                             border: 1px solid #1976D2; border-radius: 6px; 
                             padding: 8px; margin: 5px 0; text-align: center; font-size: 0.9em;">
                     <strong>📄 {doc_name}</strong>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        if web_names:
+            st.markdown("<p style='color: #5B0F1B; font-weight: 600; margin: 10px 0 5px 0;'>🌐 Web Sources:</p>", unsafe_allow_html=True)
+            for web_name in web_names:
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #E8F5E8, #C8E6C9); 
+                            border: 1px solid #4CAF50; border-radius: 6px; 
+                            padding: 8px; margin: 5px 0; text-align: center; font-size: 0.9em;">
+                    <strong>🌐 {web_name}</strong>
                 </div>
                 """, unsafe_allow_html=True)
         
