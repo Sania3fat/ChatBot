@@ -33,7 +33,7 @@ st.set_page_config(
     page_title="Ask Scottie - Maryville College Academic Assistant",
     page_icon="🐕‍🦺",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Simple styling that definitely works
@@ -49,8 +49,8 @@ st.markdown("""
     }
     
     .info-box {
-        background: #E3F2FD;
-        border-left: 4px solid #1976D2;
+        background: #F5F5F5;
+        border-left: 4px solid #5B0F1B;
         padding: 15px;
         border-radius: 5px;
         margin: 10px 0;
@@ -783,17 +783,7 @@ def main():
         return
     
     # Display system info in sidebar
-    with st.sidebar:
-        st.header("📊 System Information")
-        st.metric("PDF Documents", len(chatbot.pdf_contents))
-        st.metric("Web Sources", len(chatbot.web_contents))
-        st.metric("Knowledge Chunks", len(chatbot.text_chunks))
-        st.metric("Chat Messages", len(st.session_state.messages))
-        
-        if st.session_state.messages:
-            if st.button("🗑️ Clear Chat History"):
-                st.session_state.messages = []
-                st.rerun()
+    
 
     # Display initial content if no messages
     if st.session_state.messages == []:
