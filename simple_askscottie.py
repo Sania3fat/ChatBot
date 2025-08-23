@@ -40,8 +40,8 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        background: linear-gradient(135deg, #5B0F1B, #EC5E1A);
-        color: white;
+        background: linear-gradient(135deg, #5B0F1B, #EC5E1A) !important;
+        color: white !important;
         padding: 20px;
         border-radius: 10px;
         text-align: center;
@@ -49,22 +49,37 @@ st.markdown("""
     }
     
     .info-box {
-        background: #F5F5F5;
-        border-left: 4px solid #5B0F1B;
+        background: #E8E8E8 !important;
+        color: #333333 !important;
+        border: 1px solid #CCCCCC !important;
+        border-left: 4px solid #5B0F1B !important;
         padding: 15px;
         border-radius: 5px;
         margin: 10px 0;
+        font-weight: normal !important;
+    }
+    
+    .info-box strong {
+        color: #222222 !important;
+        font-weight: bold !important;
     }
     
     .source-item {
-        background: #F5F5F5;
-        border: 1px solid #DDD;
+        background: #F8F8F8 !important;
+        color: #333333 !important;
+        border: 1px solid #DDDDDD !important;
         padding: 10px;
         margin: 5px 0;
         border-radius: 5px;
     }
+    
+    /* Ensure text visibility across all themes */
+    .stMarkdown p {
+        color: inherit !important;
+    }
 </style>
 """, unsafe_allow_html=True)
+
 
 # --- INSTITUTIONAL CONFIGURATION ---
 class Config:
