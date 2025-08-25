@@ -773,7 +773,7 @@ def main():
                  style="width: 60px; height: 60px; border-radius: 50%; background: white; padding: 5px;">
             <div>
                 <h1 style="margin: 0; font-size: 2.5em;">Ask Scottie</h1>
-                <p style="margin: 5px 0 0 0;">Academic Catalog Assistant</p>
+                <p style="margin: 1px 0 0 0;">Academic Catalog Assistant</p>
             </div>
         </div>
     </div>
@@ -813,7 +813,7 @@ def main():
     # Display system info in sidebar
     
     keep_alive()
-    
+
 
     # Display initial content if no messages
     if st.session_state.messages == []:
