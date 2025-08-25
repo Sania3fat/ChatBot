@@ -750,6 +750,19 @@ def initialize_chatbot():
             
     return st.session_state.chatbot
 
+# Add this near the top of your main() function, after the header
+def keep_alive():
+    """Add auto-refresh to prevent sleeping"""
+    st.markdown("""
+    <script>
+        // Auto-refresh every 25 minutes to prevent sleeping
+        setTimeout(function(){
+            window.location.reload();
+        }, 300000); // 5 minutes in milliseconds
+    </script>
+    """, unsafe_allow_html=True)
+
+
 def main():
     # Header with your custom logo
     st.markdown("""
@@ -760,7 +773,7 @@ def main():
                  style="width: 60px; height: 60px; border-radius: 50%; background: white; padding: 5px;">
             <div>
                 <h1 style="margin: 0; font-size: 2.5em;">Ask Scottie</h1>
-                <p style="margin: 5px 0 0 0;">Scottish Terrier Academic Assistant • Maryville College Academic Catalog Helper</p>
+                <p style="margin: 5px 0 0 0;">Academic Catalog Assistant</p>
             </div>
         </div>
     </div>
@@ -798,6 +811,8 @@ def main():
         return
     
     # Display system info in sidebar
+    
+    keep_alive()
     
 
     # Display initial content if no messages
